@@ -1,0 +1,263 @@
+# Criar uma Secret com Múltiplos Valores em um Azure Key Vault Existente
+
+Este procedimento mostra como criar uma **secret no Azure Key Vault** contendo múltiplos valores, usando **Azure CLI (`az`) no Bash**.
+
+> Importante: no Azure Key Vault, uma secret armazena um único valor. Para armazenar múltiplos campos, a prática mais comum é salvar os dados em formato **JSON** dentro da secret.
+
+---
+
+## 1. Pré-requisitos
+
+Antes de executar o procedimento, confirme que você possui:
+
+- Azure CLI instalado
+- Acesso autenticado na Azure
+- Permissão para criar secrets no Key Vault existente
+- Nome do Key Vault
+- Nome desejado para a secret
+
+Validar login na Azure:
+
+```bash
+az account show
+```
+
+Caso não esteja autenticado:
+
+```bash
+az login
+```
+
+Selecionar a subscription correta, se necessário:
+
+```bash
+az account set --subscription "NOME_OU_ID_DA_SUBSCRIPTION"
+```
+
+---
+
+## 2. Definir variáveis
+
+Ajuste os valores conforme seu ambiente:
+
+```bash
+KEYVAULT_NAME="kv-existente"
+SECRET_NAME="app-config"
+```
+
+Exemplo:
+
+```bash
+KEYVAULT_NAME="kv-core-hml-bra"
+SECRET_NAME="postgres-app-config"
+```
+
+---
+
+## 3. Criar a secret com múltiplos valores usando JSON inline
+
+Neste exemplo, a secret terá múltiplos campos como usuário, senha, banco, host e porta.
+
+```bash
+SECRET_VALUE='{
+  "username": "usuario_app",
+  "password": "senha_forte_aqui",
+  "database": "meubanco",
+  "host": "postgres.default.svc.cluster.local",
+  "port": "5432"
+}'
+
+az keyvault secret set \
+  --vault-name "$KEYVAULT_NAME" \
+  --name "$SECRET_NAME" \
+  --value "$SECRET_VALUE"
+```
+
+---
+
+## 4. Criar a secret usando arquivo JSON
+
+Essa abordagem é mais organizada quando existem muitos campos.
+
+Criar o arquivo `secret.json`:
+
+```bash
+cat > secret.json <<'EOF'
+{
+  "username": "usuario_app",
+  "password": "senha_forte_aqui",
+  "database": "meubanco",
+  "host": "postgres.default.svc.cluster.local",
+  "port": "5432"
+}
+EOF
+```
+
+Gravar o conteúdo do arquivo como secret no Key Vault:
+
+```bash
+az keyvault secret set \
+  --vault-name "$KEYVAULT_NAME" \
+  --name "$SECRET_NAME" \
+  --file secret.json
+```
+
+---
+
+## 5. Consultar a secret
+
+Para exibir o valor completo da secret:
+
+```bash
+az keyvault secret show \
+  --vault-name "$KEYVAULT_NAME" \
+  --name "$SECRET_NAME" \
+  --query value \
+  -o tsv
+```
+
+Se o conteúdo estiver em JSON, é possível formatar com `jq`:
+
+```bash
+az keyvault secret show \
+  --vault-name "$KEYVAULT_NAME" \
+  --name "$SECRET_NAME" \
+  --query value \
+  -o tsv | jq .
+```
+
+---
+
+## 6. Recuperar um campo específico da secret
+
+Exemplo para recuperar apenas o campo `password`:
+
+```bash
+PASSWORD=$(az keyvault secret show \
+  --vault-name "$KEYVAULT_NAME" \
+  --name "$SECRET_NAME" \
+  --query value \
+  -o tsv | jq -r '.password')
+
+echo "$PASSWORD"
+```
+
+Exemplo para recuperar o campo `username`:
+
+```bash
+USERNAME=$(az keyvault secret show \
+  --vault-name "$KEYVAULT_NAME" \
+  --name "$SECRET_NAME" \
+  --query value \
+  -o tsv | jq -r '.username')
+
+echo "$USERNAME"
+```
+
+---
+
+## 7. Atualizar a secret
+
+Para atualizar uma secret existente, execute novamente o comando `az keyvault secret set` com o mesmo nome da secret.
+
+Exemplo:
+
+```bash
+SECRET_VALUE='{
+  "username": "usuario_app",
+  "password": "nova_senha_forte_aqui",
+  "database": "meubanco",
+  "host": "postgres.default.svc.cluster.local",
+  "port": "5432"
+}'
+
+az keyvault secret set \
+  --vault-name "$KEYVAULT_NAME" \
+  --name "$SECRET_NAME" \
+  --value "$SECRET_VALUE"
+```
+
+O Azure Key Vault cria uma nova versão da secret automaticamente.
+
+---
+
+## 8. Listar versões da secret
+
+```bash
+az keyvault secret list-versions \
+  --vault-name "$KEYVAULT_NAME" \
+  --name "$SECRET_NAME" \
+  -o table
+```
+
+---
+
+## 9. Validar se a secret existe
+
+```bash
+az keyvault secret show \
+  --vault-name "$KEYVAULT_NAME" \
+  --name "$SECRET_NAME" \
+  -o table
+```
+
+---
+
+## 10. Exemplo completo para copiar e executar
+
+```bash
+#!/bin/bash
+
+set -e
+
+KEYVAULT_NAME="kv-existente"
+SECRET_NAME="app-config"
+
+SECRET_VALUE='{
+  "username": "usuario_app",
+  "password": "senha_forte_aqui",
+  "database": "meubanco",
+  "host": "postgres.default.svc.cluster.local",
+  "port": "5432"
+}'
+
+echo "Criando ou atualizando a secret: $SECRET_NAME"
+
+az keyvault secret set \
+  --vault-name "$KEYVAULT_NAME" \
+  --name "$SECRET_NAME" \
+  --value "$SECRET_VALUE"
+
+echo "Secret criada ou atualizada com sucesso."
+```
+
+---
+
+## 11. Boas práticas
+
+- Evite colocar senhas diretamente no histórico do terminal.
+- Prefira usar arquivo temporário ou variáveis de ambiente em automações.
+- Restrinja o acesso ao Key Vault usando RBAC ou Access Policies.
+- Não faça commit de arquivos contendo secrets.
+- Evite imprimir senhas no terminal com `echo` em ambientes compartilhados.
+- Sempre valide se a aplicação que irá consumir a secret consegue interpretar JSON.
+
+---
+
+## 12. Observação importante
+
+O Azure Key Vault não entende os campos internos do JSON como secrets separadas. Para o Key Vault, o conteúdo inteiro é apenas o valor de uma única secret.
+
+Ou seja, esta estrutura:
+
+```json
+{
+  "username": "usuario_app",
+  "password": "senha_forte_aqui",
+  "database": "meubanco"
+}
+```
+
+Será armazenada como uma única secret.
+
+A aplicação, pipeline ou script responsável por consumir essa secret deverá fazer o parse do JSON para extrair os campos necessários.
