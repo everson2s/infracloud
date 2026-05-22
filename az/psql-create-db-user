@@ -1,0 +1,503 @@
+# Criação de Banco e Usuário em PostgreSQL existente no AKS
+
+Este documento descreve o passo a passo para criar um novo banco de dados e um usuário dedicado em uma instância PostgreSQL existente executando dentro de um cluster AKS.
+
+O objetivo é permitir que uma aplicação utilize um banco próprio, com usuário e permissões controladas.
+
+---
+
+## 1. Pré-requisitos
+
+Antes de iniciar, confirme que você possui:
+
+- Acesso ao cluster AKS via `kubectl`;
+- Permissão para acessar o namespace onde o PostgreSQL está rodando;
+- Acesso ao usuário administrador do PostgreSQL, normalmente `postgres`;
+- Nome do pod ou service do PostgreSQL;
+- Nome do banco que será criado;
+- Nome do usuário que será criado;
+- Senha segura para o novo usuário.
+
+---
+
+## 2. Identificar o namespace do PostgreSQL
+
+Liste os namespaces do cluster:
+
+```bash
+kubectl get namespaces
+```
+
+Identifique o namespace onde o PostgreSQL está instalado.
+
+Exemplo:
+
+```bash
+kubectl get pods -A | grep postgres
+```
+
+---
+
+## 3. Listar os pods do PostgreSQL
+
+Substitua `<namespace>` pelo namespace correto:
+
+```bash
+kubectl get pods -n <namespace>
+```
+
+Exemplo:
+
+```bash
+kubectl get pods -n database
+```
+
+---
+
+## 4. Acessar o pod do PostgreSQL
+
+Substitua `<namespace>` e `<pod-postgres>` pelos valores corretos:
+
+```bash
+kubectl exec -it -n <namespace> <pod-postgres> -- bash
+```
+
+Exemplo:
+
+```bash
+kubectl exec -it -n database postgres-0 -- bash
+```
+
+Caso a imagem do PostgreSQL não tenha `bash`, utilize `sh`:
+
+```bash
+kubectl exec -it -n <namespace> <pod-postgres> -- sh
+```
+
+---
+
+## 5. Acessar o PostgreSQL com o usuário administrador
+
+Dentro do pod, acesse o PostgreSQL com o usuário `postgres`:
+
+```bash
+psql -U postgres
+```
+
+Se for necessário informar o banco padrão:
+
+```bash
+psql -U postgres -d postgres
+```
+
+---
+
+## 6. Criar o banco de dados
+
+Dentro do prompt do `psql`, execute:
+
+```sql
+CREATE DATABASE nome_do_banco;
+```
+
+Exemplo:
+
+```sql
+CREATE DATABASE appdb;
+```
+
+---
+
+## 7. Criar o usuário do banco
+
+Crie um usuário com senha:
+
+```sql
+CREATE USER nome_do_usuario WITH ENCRYPTED PASSWORD 'senha_forte_aqui';
+```
+
+Exemplo:
+
+```sql
+CREATE USER appuser WITH ENCRYPTED PASSWORD 'MinhaSenhaForte@123';
+```
+
+> Recomenda-se utilizar uma senha forte e armazená-la em um Secret do Kubernetes ou em uma solução segura de gerenciamento de segredos.
+
+---
+
+## 8. Conceder permissões no banco
+
+Conceda permissões para o usuário no banco criado:
+
+```sql
+GRANT ALL PRIVILEGES ON DATABASE nome_do_banco TO nome_do_usuario;
+```
+
+Exemplo:
+
+```sql
+GRANT ALL PRIVILEGES ON DATABASE appdb TO appuser;
+```
+
+---
+
+## 9. Conectar no banco criado
+
+Ainda dentro do `psql`, conecte no banco novo:
+
+```sql
+\c nome_do_banco
+```
+
+Exemplo:
+
+```sql
+\c appdb
+```
+
+---
+
+## 10. Conceder permissões no schema public
+
+Após conectar no banco criado, conceda permissões no schema `public`:
+
+```sql
+GRANT ALL ON SCHEMA public TO nome_do_usuario;
+```
+
+Exemplo:
+
+```sql
+GRANT ALL ON SCHEMA public TO appuser;
+```
+
+---
+
+## 11. Alterar o owner do schema public
+
+Para que o usuário consiga criar objetos no schema `public`, execute:
+
+```sql
+ALTER SCHEMA public OWNER TO nome_do_usuario;
+```
+
+Exemplo:
+
+```sql
+ALTER SCHEMA public OWNER TO appuser;
+```
+
+---
+
+## 12. Permissões para objetos futuros
+
+Para garantir que o usuário tenha permissão sobre tabelas e sequences criadas futuramente no schema `public`, execute:
+
+```sql
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+GRANT ALL ON TABLES TO nome_do_usuario;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+GRANT ALL ON SEQUENCES TO nome_do_usuario;
+```
+
+Exemplo:
+
+```sql
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+GRANT ALL ON TABLES TO appuser;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+GRANT ALL ON SEQUENCES TO appuser;
+```
+
+---
+
+## 13. Receita completa
+
+Abaixo está o exemplo completo para criar o banco `appdb` e o usuário `appuser`.
+
+```sql
+CREATE DATABASE appdb;
+
+CREATE USER appuser WITH ENCRYPTED PASSWORD 'MinhaSenhaForte@123';
+
+GRANT ALL PRIVILEGES ON DATABASE appdb TO appuser;
+
+\c appdb
+
+GRANT ALL ON SCHEMA public TO appuser;
+
+ALTER SCHEMA public OWNER TO appuser;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+GRANT ALL ON TABLES TO appuser;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+GRANT ALL ON SEQUENCES TO appuser;
+```
+
+---
+
+## 14. Validar bancos existentes
+
+Para listar os bancos de dados:
+
+```sql
+\l
+```
+
+---
+
+## 15. Validar usuários existentes
+
+Para listar os usuários/roles:
+
+```sql
+\du
+```
+
+---
+
+## 16. Sair do PostgreSQL
+
+Para sair do `psql`:
+
+```sql
+\q
+```
+
+---
+
+## 17. Testar conexão com o novo usuário dentro do pod
+
+Dentro do pod PostgreSQL, teste a conexão com o novo usuário:
+
+```bash
+psql -U nome_do_usuario -d nome_do_banco -h localhost
+```
+
+Exemplo:
+
+```bash
+psql -U appuser -d appdb -h localhost
+```
+
+---
+
+## 18. Testar conexão usando o service do Kubernetes
+
+Primeiro, liste os services no namespace:
+
+```bash
+kubectl get svc -n <namespace>
+```
+
+Depois, teste usando o nome do service:
+
+```bash
+psql -U nome_do_usuario -d nome_do_banco -h <service-postgres> -p 5432
+```
+
+Exemplo:
+
+```bash
+psql -U appuser -d appdb -h postgres-service -p 5432
+```
+
+---
+
+## 19. Criar Secret no Kubernetes para a aplicação
+
+Após criar o usuário e o banco, recomenda-se armazenar as credenciais em um Secret do Kubernetes.
+
+Exemplo:
+
+```bash
+kubectl create secret generic postgres-app-credentials \
+  -n <namespace> \
+  --from-literal=POSTGRES_HOST='<service-postgres>' \
+  --from-literal=POSTGRES_PORT='5432' \
+  --from-literal=POSTGRES_DB='nome_do_banco' \
+  --from-literal=POSTGRES_USER='nome_do_usuario' \
+  --from-literal=POSTGRES_PASSWORD='senha_forte_aqui'
+```
+
+Exemplo preenchido:
+
+```bash
+kubectl create secret generic postgres-app-credentials \
+  -n app \
+  --from-literal=POSTGRES_HOST='postgres-service.database.svc.cluster.local' \
+  --from-literal=POSTGRES_PORT='5432' \
+  --from-literal=POSTGRES_DB='appdb' \
+  --from-literal=POSTGRES_USER='appuser' \
+  --from-literal=POSTGRES_PASSWORD='MinhaSenhaForte@123'
+```
+
+---
+
+## 20. Exemplo de uso em Deployment
+
+Exemplo de como consumir o Secret em uma aplicação Kubernetes:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app
+  namespace: app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: app
+  template:
+    metadata:
+      labels:
+        app: app
+    spec:
+      containers:
+        - name: app
+          image: nginx:latest
+          env:
+            - name: POSTGRES_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-app-credentials
+                  key: POSTGRES_HOST
+            - name: POSTGRES_PORT
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-app-credentials
+                  key: POSTGRES_PORT
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-app-credentials
+                  key: POSTGRES_DB
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-app-credentials
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-app-credentials
+                  key: POSTGRES_PASSWORD
+```
+
+---
+
+## 21. Boas práticas
+
+- Não utilize o usuário `postgres` diretamente na aplicação;
+- Crie um usuário dedicado por aplicação ou serviço;
+- Utilize senha forte;
+- Armazene a senha em Secret ou solução segura de cofre;
+- Evite conceder permissões globais desnecessárias;
+- Documente qual aplicação utiliza cada banco e usuário;
+- Sempre valide a conexão antes de liberar a aplicação;
+- Em ambientes produtivos, revise permissões com o time responsável por banco de dados ou segurança.
+
+---
+
+## 22. Troubleshooting
+
+### Erro: database already exists
+
+Significa que o banco já existe.
+
+Valide com:
+
+```sql
+\l
+```
+
+---
+
+### Erro: role already exists
+
+Significa que o usuário já existe.
+
+Valide com:
+
+```sql
+\du
+```
+
+---
+
+### Erro de senha ao conectar
+
+Valide se a senha foi digitada corretamente.
+
+Você pode alterar a senha do usuário com:
+
+```sql
+ALTER USER nome_do_usuario WITH ENCRYPTED PASSWORD 'nova_senha_forte';
+```
+
+---
+
+### Erro de permissão ao criar tabela
+
+Conecte no banco e revise as permissões no schema:
+
+```sql
+\c nome_do_banco
+
+GRANT ALL ON SCHEMA public TO nome_do_usuario;
+
+ALTER SCHEMA public OWNER TO nome_do_usuario;
+```
+
+---
+
+### Erro de DNS ao conectar pelo service
+
+Valide se o service existe:
+
+```bash
+kubectl get svc -n <namespace>
+```
+
+Valide o DNS completo dentro do cluster:
+
+```bash
+<service>.<namespace>.svc.cluster.local
+```
+
+Exemplo:
+
+```bash
+postgres-service.database.svc.cluster.local
+```
+
+---
+
+## 23. Comandos rápidos
+
+Modelo genérico:
+
+```sql
+CREATE DATABASE nome_do_banco;
+
+CREATE USER nome_do_usuario WITH ENCRYPTED PASSWORD 'senha_forte_aqui';
+
+GRANT ALL PRIVILEGES ON DATABASE nome_do_banco TO nome_do_usuario;
+
+\c nome_do_banco
+
+GRANT ALL ON SCHEMA public TO nome_do_usuario;
+
+ALTER SCHEMA public OWNER TO nome_do_usuario;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+GRANT ALL ON TABLES TO nome_do_usuario;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+GRANT ALL ON SEQUENCES TO nome_do_usuario;
+```
