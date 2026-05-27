@@ -1,0 +1,591 @@
+# Backup e Restore de Azure Key Vault
+
+Este procedimento descreve como realizar backup dos objetos de um **Azure Key Vault** e restaurá-los em outro Key Vault usando **Azure CLI**.
+
+> Importante: o Azure Key Vault não possui um comando único para backup do vault inteiro.  
+> O backup é feito individualmente por tipo de objeto:
+>
+> - Secrets
+> - Keys
+> - Certificates
+
+---
+
+## 1. Visão geral
+
+O processo consiste em:
+
+1. Autenticar na Azure.
+2. Selecionar a subscription correta.
+3. Criar uma estrutura local para armazenar os arquivos de backup.
+4. Exportar backups de secrets, keys e certificates do Key Vault de origem.
+5. Restaurar os objetos no Key Vault de destino.
+6. Validar se os objetos foram restaurados corretamente.
+
+---
+
+## 2. Pré-requisitos
+
+Antes de executar o procedimento, valide se você possui:
+
+- Azure CLI instalado.
+- Acesso ao Key Vault de origem.
+- Acesso ao Key Vault de destino.
+- Permissão para listar, fazer backup e restaurar objetos do Key Vault.
+- Key Vault de destino já criado.
+- Origem e destino compatíveis para restore.
+
+---
+
+## 3. Pontos importantes
+
+O backup do Azure Key Vault gera arquivos criptografados no formato `.bak`.
+
+Esses arquivos:
+
+- Não podem ser lidos manualmente.
+- Só podem ser restaurados pelo Azure Key Vault.
+- São vinculados às regras de compatibilidade do próprio Azure.
+- Não substituem objetos existentes com o mesmo nome no vault destino.
+
+Caso já exista uma secret, key ou certificate com o mesmo nome no vault destino, o restore poderá falhar.
+
+---
+
+## 4. Permissões necessárias
+
+Se o Key Vault estiver usando **Azure RBAC**, normalmente o operador precisa de uma função como:
+
+```text
+Key Vault Administrator
+```
+
+Ou permissões equivalentes para:
+
+```text
+secrets: list, backup, restore
+keys: list, backup, restore
+certificates: list, backup, restore
+```
+
+Se o Key Vault estiver usando **Access Policy**, valide se o usuário ou service principal possui permissões explícitas para:
+
+```text
+Secret Management Operations:
+- List
+- Backup
+- Restore
+
+Key Management Operations:
+- List
+- Backup
+- Restore
+
+Certificate Management Operations:
+- List
+- Backup
+- Restore
+```
+
+---
+
+## 5. Variáveis do ambiente
+
+Altere os valores abaixo conforme o ambiente:
+
+```bash
+SUBSCRIPTION_ID="<subscription-id>"
+
+SOURCE_VAULT="<key-vault-origem>"
+TARGET_VAULT="<key-vault-destino>"
+
+BACKUP_DIR="./keyvault-backup"
+```
+
+Exemplo:
+
+```bash
+SUBSCRIPTION_ID="00000000-0000-0000-0000-000000000000"
+
+SOURCE_VAULT="kv-app-hml-bra"
+TARGET_VAULT="kv-app-dr-hml-bra"
+
+BACKUP_DIR="./keyvault-backup"
+```
+
+---
+
+## 6. Login e seleção da subscription
+
+```bash
+az login
+
+az account set --subscription "$SUBSCRIPTION_ID"
+
+az account show -o table
+```
+
+---
+
+## 7. Criar estrutura de diretórios
+
+```bash
+mkdir -p "$BACKUP_DIR/secrets"
+mkdir -p "$BACKUP_DIR/keys"
+mkdir -p "$BACKUP_DIR/certificates"
+```
+
+Estrutura esperada:
+
+```text
+keyvault-backup/
+├── secrets/
+├── keys/
+└── certificates/
+```
+
+---
+
+# Backup
+
+## 8. Backup de Secrets
+
+```bash
+for secret in $(az keyvault secret list \
+  --vault-name "$SOURCE_VAULT" \
+  --query "[].name" -o tsv); do
+
+  echo "Backup secret: $secret"
+
+  az keyvault secret backup \
+    --vault-name "$SOURCE_VAULT" \
+    --name "$secret" \
+    --file "$BACKUP_DIR/secrets/$secret.bak"
+done
+```
+
+---
+
+## 9. Backup de Keys
+
+```bash
+for key in $(az keyvault key list \
+  --vault-name "$SOURCE_VAULT" \
+  --query "[].name" -o tsv); do
+
+  echo "Backup key: $key"
+
+  az keyvault key backup \
+    --vault-name "$SOURCE_VAULT" \
+    --name "$key" \
+    --file "$BACKUP_DIR/keys/$key.bak"
+done
+```
+
+---
+
+## 10. Backup de Certificates
+
+```bash
+for cert in $(az keyvault certificate list \
+  --vault-name "$SOURCE_VAULT" \
+  --query "[].name" -o tsv); do
+
+  echo "Backup certificate: $cert"
+
+  az keyvault certificate backup \
+    --vault-name "$SOURCE_VAULT" \
+    --name "$cert" \
+    --file "$BACKUP_DIR/certificates/$cert.bak"
+done
+```
+
+---
+
+## 11. Script completo de backup
+
+Crie um arquivo chamado:
+
+```bash
+backup-keyvault.sh
+```
+
+Conteúdo:
+
+```bash
+#!/bin/bash
+
+set -euo pipefail
+
+SUBSCRIPTION_ID="<subscription-id>"
+SOURCE_VAULT="<key-vault-origem>"
+BACKUP_DIR="./keyvault-backup"
+
+echo "Selecionando subscription..."
+az account set --subscription "$SUBSCRIPTION_ID"
+
+echo "Criando estrutura de diretórios..."
+mkdir -p "$BACKUP_DIR/secrets"
+mkdir -p "$BACKUP_DIR/keys"
+mkdir -p "$BACKUP_DIR/certificates"
+
+echo "Iniciando backup de secrets..."
+for secret in $(az keyvault secret list \
+  --vault-name "$SOURCE_VAULT" \
+  --query "[].name" -o tsv); do
+
+  echo "Backup secret: $secret"
+
+  az keyvault secret backup \
+    --vault-name "$SOURCE_VAULT" \
+    --name "$secret" \
+    --file "$BACKUP_DIR/secrets/$secret.bak"
+done
+
+echo "Iniciando backup de keys..."
+for key in $(az keyvault key list \
+  --vault-name "$SOURCE_VAULT" \
+  --query "[].name" -o tsv); do
+
+  echo "Backup key: $key"
+
+  az keyvault key backup \
+    --vault-name "$SOURCE_VAULT" \
+    --name "$key" \
+    --file "$BACKUP_DIR/keys/$key.bak"
+done
+
+echo "Iniciando backup de certificates..."
+for cert in $(az keyvault certificate list \
+  --vault-name "$SOURCE_VAULT" \
+  --query "[].name" -o tsv); do
+
+  echo "Backup certificate: $cert"
+
+  az keyvault certificate backup \
+    --vault-name "$SOURCE_VAULT" \
+    --name "$cert" \
+    --file "$BACKUP_DIR/certificates/$cert.bak"
+done
+
+echo "Backup finalizado com sucesso."
+echo "Arquivos salvos em: $BACKUP_DIR"
+```
+
+Dar permissão de execução:
+
+```bash
+chmod +x backup-keyvault.sh
+```
+
+Executar:
+
+```bash
+./backup-keyvault.sh
+```
+
+---
+
+# Restore
+
+## 12. Restore de Secrets
+
+```bash
+for file in "$BACKUP_DIR/secrets/"*.bak; do
+  [ -e "$file" ] || continue
+
+  echo "Restore secret: $file"
+
+  az keyvault secret restore \
+    --vault-name "$TARGET_VAULT" \
+    --file "$file"
+done
+```
+
+---
+
+## 13. Restore de Keys
+
+```bash
+for file in "$BACKUP_DIR/keys/"*.bak; do
+  [ -e "$file" ] || continue
+
+  echo "Restore key: $file"
+
+  az keyvault key restore \
+    --vault-name "$TARGET_VAULT" \
+    --file "$file"
+done
+```
+
+---
+
+## 14. Restore de Certificates
+
+```bash
+for file in "$BACKUP_DIR/certificates/"*.bak; do
+  [ -e "$file" ] || continue
+
+  echo "Restore certificate: $file"
+
+  az keyvault certificate restore \
+    --vault-name "$TARGET_VAULT" \
+    --file "$file"
+done
+```
+
+---
+
+## 15. Script completo de restore
+
+Crie um arquivo chamado:
+
+```bash
+restore-keyvault.sh
+```
+
+Conteúdo:
+
+```bash
+#!/bin/bash
+
+set -euo pipefail
+
+SUBSCRIPTION_ID="<subscription-id>"
+TARGET_VAULT="<key-vault-destino>"
+BACKUP_DIR="./keyvault-backup"
+
+echo "Selecionando subscription..."
+az account set --subscription "$SUBSCRIPTION_ID"
+
+echo "Iniciando restore de secrets..."
+for file in "$BACKUP_DIR/secrets/"*.bak; do
+  [ -e "$file" ] || continue
+
+  echo "Restore secret: $file"
+
+  az keyvault secret restore \
+    --vault-name "$TARGET_VAULT" \
+    --file "$file"
+done
+
+echo "Iniciando restore de keys..."
+for file in "$BACKUP_DIR/keys/"*.bak; do
+  [ -e "$file" ] || continue
+
+  echo "Restore key: $file"
+
+  az keyvault key restore \
+    --vault-name "$TARGET_VAULT" \
+    --file "$file"
+done
+
+echo "Iniciando restore de certificates..."
+for file in "$BACKUP_DIR/certificates/"*.bak; do
+  [ -e "$file" ] || continue
+
+  echo "Restore certificate: $file"
+
+  az keyvault certificate restore \
+    --vault-name "$TARGET_VAULT" \
+    --file "$file"
+done
+
+echo "Restore finalizado com sucesso."
+```
+
+Dar permissão de execução:
+
+```bash
+chmod +x restore-keyvault.sh
+```
+
+Executar:
+
+```bash
+./restore-keyvault.sh
+```
+
+---
+
+# Validação
+
+## 16. Validar Secrets
+
+```bash
+az keyvault secret list \
+  --vault-name "$TARGET_VAULT" \
+  -o table
+```
+
+---
+
+## 17. Validar Keys
+
+```bash
+az keyvault key list \
+  --vault-name "$TARGET_VAULT" \
+  -o table
+```
+
+---
+
+## 18. Validar Certificates
+
+```bash
+az keyvault certificate list \
+  --vault-name "$TARGET_VAULT" \
+  -o table
+```
+
+---
+
+## 19. Validar quantidade de objetos
+
+### Origem
+
+```bash
+echo "Secrets origem:"
+az keyvault secret list --vault-name "$SOURCE_VAULT" --query "length([])"
+
+echo "Keys origem:"
+az keyvault key list --vault-name "$SOURCE_VAULT" --query "length([])"
+
+echo "Certificates origem:"
+az keyvault certificate list --vault-name "$SOURCE_VAULT" --query "length([])"
+```
+
+### Destino
+
+```bash
+echo "Secrets destino:"
+az keyvault secret list --vault-name "$TARGET_VAULT" --query "length([])"
+
+echo "Keys destino:"
+az keyvault key list --vault-name "$TARGET_VAULT" --query "length([])"
+
+echo "Certificates destino:"
+az keyvault certificate list --vault-name "$TARGET_VAULT" --query "length([])"
+```
+
+---
+
+# Procedimento resumido
+
+## Backup
+
+```bash
+az login
+az account set --subscription "$SUBSCRIPTION_ID"
+./backup-keyvault.sh
+```
+
+## Restore
+
+```bash
+az login
+az account set --subscription "$SUBSCRIPTION_ID"
+./restore-keyvault.sh
+```
+
+## Validação
+
+```bash
+az keyvault secret list --vault-name "$TARGET_VAULT" -o table
+az keyvault key list --vault-name "$TARGET_VAULT" -o table
+az keyvault certificate list --vault-name "$TARGET_VAULT" -o table
+```
+
+---
+
+# Troubleshooting
+
+## Erro de permissão
+
+Mensagem comum:
+
+```text
+Forbidden
+```
+
+Verifique se o usuário ou service principal possui permissões de:
+
+```text
+list
+backup
+restore
+```
+
+Para secrets, keys e certificates.
+
+---
+
+## Objeto já existe no vault destino
+
+Mensagem comum:
+
+```text
+Object already exists
+```
+
+O restore não sobrescreve objetos já existentes.
+
+Nesse caso, valide se o objeto pode ser removido do destino ou se será necessário restaurar em outro vault limpo.
+
+---
+
+## Arquivo de backup não encontrado
+
+Mensagem comum:
+
+```text
+No such file or directory
+```
+
+Valide se a variável abaixo aponta para o diretório correto:
+
+```bash
+BACKUP_DIR="./keyvault-backup"
+```
+
+---
+
+## Restore falhou por incompatibilidade
+
+O restore pode falhar se o vault de destino não for compatível com o backup gerado.
+
+Valide principalmente:
+
+- Subscription.
+- Região/geografia.
+- Tipo de objeto.
+- Permissões.
+- Existência prévia do objeto no vault destino.
+
+---
+
+# Boas práticas
+
+- Executar primeiro em ambiente de homologação.
+- Armazenar os arquivos `.bak` em local seguro.
+- Não versionar arquivos `.bak` em repositórios Git.
+- Não expor os arquivos de backup publicamente.
+- Validar permissões antes da janela de mudança.
+- Fazer restore em um Key Vault vazio sempre que possível.
+- Registrar evidências de backup e restore.
+- Executar validação após o processo.
+
+---
+
+# Estrutura recomendada dos arquivos
+
+```text
+.
+├── README.md
+├── backup-keyvault.sh
+├── restore-keyvault.sh
+└── keyvault-backup/
+    ├── secrets/
+    ├── keys/
+    └── certificates/
+```
