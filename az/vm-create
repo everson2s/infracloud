@@ -1,0 +1,36 @@
+# Variáveis
+RG="xxxx"
+LOCATION="eastus"
+VM_NAME="xxxxx"
+VNET_NAME="vnet-xxxx-hml"
+SUBNET_NAME="xxx"
+ADMIN_USER="xxxxx"
+ADMIN_PASSWORD='xxxxx'
+
+# Criar VM privada sem IP público
+az vm create \
+  --resource-group "$RG" \
+  --name "$VM_NAME" \
+  --location "$LOCATION" \
+  --image Ubuntu2204 \
+  --size Standard_B1s \
+  --vnet-name "$VNET_NAME" \
+  --subnet "$SUBNET_NAME" \
+  --public-ip-address "" \
+  --admin-username "$ADMIN_USER" \
+  --admin-password "$ADMIN_PASSWORD" \
+  --authentication-type password \
+  --nsg "" \
+  --boot-diagnostics-storage "" \
+  --tags ambiente=hml finalidade=teste-rede-databricks
+
+
+az vm run-command invoke \
+  --resource-group "$RG" \
+  --name "$VM_NAME" \
+  --command-id RunShellScript \
+  --scripts "
+sudo sed -i 's/^#PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+sudo sed -i 's/^PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+sudo systemctl restart ssh || sudo systemctl restart sshd
+"
