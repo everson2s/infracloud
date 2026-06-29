@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ============================================================
+# OPÇÃO A - STORAGE + CONTAINER + STORED ACCESS POLICY + SAS
+# ============================================================
+
+# -------- VARIÁVEIS OBRIGATÓRIAS --------
+SUBSCRIPTION_ID="<subscription-id>"
+RESOURCE_GROUP="<resource-group>"
+LOCATION="eastus"
+
+STORAGE_ACCOUNT="<storage-account-name>"   # 3-24 chars, somente letras minúsculas e números
+CONTAINER_NAME="<container-name>"
+
+# IP público ou range CIDR da empresa externa
+# Exemplo: "200.10.10.10" ou "200.10.10.0/24"
+ALLOWED_IP="<ip-ou-cidr-empresa-externa>"
+
+# Nome da policy
+POLICY_NAME="<policy-name>"
+
+# Permissões da SAS/Policy:
+# r = read
+# l = list
+# w = write
+# c = create
+# d = delete
+# Para somente leitura/listagem: "rl"
+# Para upload sem delete: "cw"
+# Para upload/download/list: "racwl" ou "rwl"
+PERMISSIONS="rl"
+
+# Expiração em UTC
+# Linux:
+EXPIRY_DATE=$(date -u -d "+30 days" '+%Y-%m-%dT%H:%MZ')
+
+# Se estiver no MacOS, comente a linha acima e use:
+# EXPIRY_DATE=$(date -u -v+30d '+%Y-%m-%dT%H:%MZ')
+
+# -------- LOGIN / SUBSCRIPTION --------
+az account set --subscription "$SUBSCRIPTION_ID"
+
+# -------- RESOURCE GROUP, SE NÃO EXISTIR --------
+az group create \
+  --name "$RESOURCE_GROUP" \
+  --location "$LOCATION" \
+  --output none
+
+# -------- CRIA STORAGE ACCOUNT --------
+az storage account create \
+  --name "$STORAGE_ACCOUNT" \
+  --resource-group "$RESOURCE_GROUP" \
+  --location "$LOCATION" \
+  --sku Standard_LRS \
+  --kind StorageV2 \
+  --https-only true \
+  --min-tls-version TLS1_2 \
+  --allow-blob-public-access false \
+  --public-network-access Enabled \
+  --default-action Deny \
+  --bypass None \
+  --output none
+
+# -------- FIREWALL: LIBERA APENAS IP DA EMPRESA EXTERNA --------
+az storage account network-rule add \
+  --resource-group "$RESOURCE_GROUP" \
+  --account-name "$STORAGE_ACCOUNT" \
+  --ip-address "$ALLOWED_IP" \
+  --output none
+
+# -------- PEGA A KEY SOMENTE PARA CRIAR CONTAINER/POLICY/SAS --------
+# Observação: aqui você não entrega a Account Key para ninguém.
+ACCOUNT_KEY=$(az storage account keys list \
+  --resource-group "$RESOURCE_GROUP" \
+  --account-name "$STORAGE_ACCOUNT" \
+  --query "[0].value" \
+  -o tsv)
+
+# -------- CRIA CONTAINER PRIVADO --------
+az storage container create \
+  --account-name "$STORAGE_ACCOUNT" \
+  --account-key "$ACCOUNT_KEY" \
+  --name "$CONTAINER_NAME" \
+  --public-access off \
+  --output none
+
+# -------- CRIA STORED ACCESS POLICY --------
+az storage container policy create \
+  --account-name "$STORAGE_ACCOUNT" \
+  --account-key "$ACCOUNT_KEY" \
+  --container-name "$CONTAINER_NAME" \
+  --name "$POLICY_NAME" \
+  --permissions "$PERMISSIONS" \
+  --expiry "$EXPIRY_DATE" \
+  --output none
+
+# -------- GERA SAS ASSOCIADA À POLICY --------
+SAS_TOKEN=$(az storage container generate-sas \
+  --account-name "$STORAGE_ACCOUNT" \
+  --account-key "$ACCOUNT_KEY" \
+  --name "$CONTAINER_NAME" \
+  --policy-name "$POLICY_NAME" \
+  --https-only \
+  -o tsv)
+
+BLOB_URL="https://${STORAGE_ACCOUNT}.blob.core.windows.net/${CONTAINER_NAME}?${SAS_TOKEN}"
+
+echo
+echo "Storage Account: $STORAGE_ACCOUNT"
+echo "Container:       $CONTAINER_NAME"
+echo "Policy:          $POLICY_NAME"
+echo "Expiração UTC:   $EXPIRY_DATE"
+echo
+echo "URL SAS para entregar à empresa externa:"
+echo "$BLOB_URL"
+echo
+echo "Teste com azcopy:"
+echo "azcopy list \"$BLOB_URL\""
+
+
+##Como revogar depois
+#az storage container policy delete \
+#  --account-name "<storage-account-name>" \
+#  --account-key "<account-key>" \
+#  --container-name "<container-name>" \
+#  --name "<policy-name>"
