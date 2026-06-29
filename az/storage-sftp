@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ============================================================
+# OPÇÃO B - STORAGE + SFTP + LOCAL USER + SSH KEY
+# ============================================================
+
+# -------- VARIÁVEIS OBRIGATÓRIAS --------
+SUBSCRIPTION_ID="<subscription-id>"
+RESOURCE_GROUP="<resource-group>"
+LOCATION="eastus"
+
+STORAGE_ACCOUNT="<storage-account-name>"   # 3-24 chars, somente letras minúsculas e números
+CONTAINER_NAME="<container-name>"
+
+# Username do SFTP:
+# regra Azure: somente letras minúsculas e números
+SFTP_USER="<sftpuser>"
+
+# IP público ou range CIDR da empresa externa
+ALLOWED_IP="<ip-ou-cidr-empresa-externa>"
+
+# Chave pública SSH da empresa externa
+# Exemplo:
+# SSH_PUBLIC_KEY='ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC...'
+SSH_PUBLIC_KEY='<ssh-public-key-da-empresa-externa>'
+
+# Permissões:
+# r = read
+# w = write
+# d = delete
+# l = list
+# c = create
+# Sugestão para upload/download/list sem delete: "rwlc"
+# Sugestão para somente upload: "wlc"
+# Sugestão para leitura/listagem: "rl"
+SFTP_PERMISSIONS="rwlc"
+
+# Home directory
+# Para cair direto no container:
+HOME_DIRECTORY="$CONTAINER_NAME"
+
+# -------- LOGIN / SUBSCRIPTION --------
+az account set --subscription "$SUBSCRIPTION_ID"
+
+# -------- RESOURCE GROUP, SE NÃO EXISTIR --------
+az group create \
+  --name "$RESOURCE_GROUP" \
+  --location "$LOCATION" \
+  --output none
+
+# -------- CRIA STORAGE COM HNS + SFTP HABILITADO --------
+az storage account create \
+  --name "$STORAGE_ACCOUNT" \
+  --resource-group "$RESOURCE_GROUP" \
+  --location "$LOCATION" \
+  --sku Standard_LRS \
+  --kind StorageV2 \
+  --https-only true \
+  --min-tls-version TLS1_2 \
+  --allow-blob-public-access false \
+  --enable-hierarchical-namespace true \
+  --enable-sftp true \
+  --enable-local-user true \
+  --public-network-access Enabled \
+  --default-action Deny \
+  --bypass None \
+  --output none
+
+# -------- FIREWALL: LIBERA APENAS IP DA EMPRESA EXTERNA --------
+az storage account network-rule add \
+  --resource-group "$RESOURCE_GROUP" \
+  --account-name "$STORAGE_ACCOUNT" \
+  --ip-address "$ALLOWED_IP" \
+  --output none
+
+# -------- PEGA KEY SOMENTE PARA CRIAR O CONTAINER --------
+ACCOUNT_KEY=$(az storage account keys list \
+  --resource-group "$RESOURCE_GROUP" \
+  --account-name "$STORAGE_ACCOUNT" \
+  --query "[0].value" \
+  -o tsv)
+
+# -------- CRIA CONTAINER PRIVADO --------
+az storage container create \
+  --account-name "$STORAGE_ACCOUNT" \
+  --account-key "$ACCOUNT_KEY" \
+  --name "$CONTAINER_NAME" \
+  --public-access off \
+  --output none
+
+# -------- CRIA LOCAL USER SFTP COM CHAVE SSH --------
+az storage account local-user create \
+  --resource-group "$RESOURCE_GROUP" \
+  --account-name "$STORAGE_ACCOUNT" \
+  --name "$SFTP_USER" \
+  --home-directory "$HOME_DIRECTORY" \
+  --permission-scope permissions="$SFTP_PERMISSIONS" service=blob resource-name="$CONTAINER_NAME" \
+  --ssh-authorized-key key="$SSH_PUBLIC_KEY" \
+  --has-ssh-key true \
+  --has-ssh-password false \
+  --has-shared-key false \
+  --output json
+
+echo
+echo "Storage Account: $STORAGE_ACCOUNT"
+echo "Container:       $CONTAINER_NAME"
+echo "SFTP User:       $SFTP_USER"
+echo
+echo "Host SFTP:"
+echo "${STORAGE_ACCOUNT}.blob.core.windows.net"
+echo
+echo "Usuário para conexão SFTP:"
+echo "${STORAGE_ACCOUNT}.${SFTP_USER}"
+echo
+echo "Exemplo de conexão:"
+echo "sftp -i ./chave_privada ${STORAGE_ACCOUNT}.${SFTP_USER}@${STORAGE_ACCOUNT}.blob.core.windows.net"
+
+
+#sftp -i ./chave_privada <storage-account>.<local-user>@<storage-account>.blob.core.windows.net
